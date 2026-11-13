@@ -1,73 +1,52 @@
-import express from "express";
-import cors from "cors";
-import "dotenv/config";
-import { MongoClient, ObjectId } from "mongodb";
+import express from 'express';
+import cors from 'cors';
+import 'dotenv/config';
+import { MongoClient, ObjectId } from 'mongodb';
 
 const app = express();
 const port = process.env.PORT || 5000;
+
+// middleware
 app.use(express.json());
 app.use(cors());
 
 const client = new MongoClient(
-  `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@cluster0.qgagqeu.mongodb.net/`,
+    `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@cluster0.qgagqeu.mongodb.net/`,
+    { serverSelectionTimeoutMS: 10000 },
 );
-export async function connectToMongoDB() {
-  try {
-    await client.connect();
-    console.log("You successfully connected to MongoDB!");
-    return client;
-  } catch (err) {
-    console.dir(err);
-  }
+
+export async function connectToMongoDB(retries = 3) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            await client.connect();
+            console.log("You successfully connected to MongoDB!");
+            return client;
+        } catch (err) {
+            console.dir(err);
+            if (attempt === retries) {
+                throw new Error(`Could not connect to MongoDB after ${retries} attempts: ${err.message}`);
+            }
+            console.log(`Retrying MongoDB connection (${attempt}/${retries - 1})...`);
+            await new Promise((r) => setTimeout(r, 2000));
+        }
+    }
 }
-const connectedClient = await connectToMongoDB();
+
+let connectedClient;
+try {
+    connectedClient = await connectToMongoDB();
+} catch (err) {
+    console.error(err.message);
+    process.exit(1);
+}
 const database = connectedClient.db("hireloop");
 const users = database.collection("user");
 const jobs = database.collection("jobs");
+const applications = database.collection("applications");
 
-
-app.get("/", (req, res) => {
-  res.send("Hello World!");
-});
-
-app.post('/jobs', async (req, res) => {
-    const job = req.body;
-    const result = await jobs.insertOne(job);
-    res.send(result);
+app.get('/', (req, res) => {
+    res.send('hire loop is looping')
 })
-
-// List every job posting. The dashboard table reads this on the server.
-app.get('/jobs', async (req, res) => {
-    try {
-        const cursor = jobs.find({});
-        const result = await cursor.toArray();
-        res.json(result);
-    } catch (err) {
-        console.error('GET /jobs failed:', err);
-        res.status(500).json({ error: 'Failed to load jobs' });
-    }
-})
-
-// Remove one posting. `id` is the hex string form of the document's ObjectId.
-app.delete('/jobs/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        if (!ObjectId.isValid(id)) {
-            return res.status(400).json({ error: 'Invalid job id' });
-        }
-        const result = await jobs.deleteOne({ _id: new ObjectId(id) });
-        if (result.deletedCount === 0) {
-            return res.status(404).json({ error: 'Job not found' });
-        }
-        res.json(result);
-    } catch (err) {
-        console.error('DELETE /jobs/:id failed:', err);
-        res.status(500).json({ error: 'Failed to delete job' });
-    }
-})
-
-
-
 
 
 app.get('/users', async (req, res) => {
@@ -77,7 +56,80 @@ app.get('/users', async (req, res) => {
 })
 
 
+// jobs related apis
+app.get('/jobs', async (req, res) => {
+
+    const query = {};
+    // console.log('query', req.query);
+    if (req.query) {
+        if (req.query.jobType) {
+            query.jobType = req.query.jobType;
+        }
+        if (req.query.isRemote) {
+            query.isRemote = req.query.isRemote === 'true';
+        }
+        if (req.query.category) {
+            query.category = req.query.category;
+        }
+        if (req.query.search) {
+            query.$or = [
+                { title: { $regex: req.query.search, $options: 'i' } },
+                { company: { $regex: req.query.search, $options: 'i' } },
+                { responsibilities: { $regex: req.query.search, $options: 'i' } },
+                { requirements: { $regex: req.query.search, $options: 'i' } }
+            ];
+        }
+    }
+
+    const cursor = jobs.find(query);
+    const result = await cursor.toArray();
+    res.send(result);
+})
+
+app.get(`/jobs/:id`, async (req, res) => {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const result = await jobs.findOne(query);
+    res.send(result);
+})
+
+
+app.post('/jobs', async (req, res) => {
+    const job = req.body;
+    const result = await jobs.insertOne(job);
+    res.send(result);
+})
+
+
+app.delete('/jobs/:id', async (req, res) => {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const result = await jobs.deleteOne(query);
+    res.send(result);
+})
+
+
+// applications related apis
+
+app.get('/applications', async (req, res) => {
+
+    const query = {};
+
+    if (req.query.applicantId) {
+        query.userId = req.query.applicantId;
+    }
+
+    const cursor = applications.find(query);
+    const result = await cursor.toArray();
+    res.send(result);
+})
+
+app.post('/applications', async (req, res) => {
+    const application = req.body;
+    const result = await applications.insertOne(application);
+    res.send(result);
+})
 
 app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`);
-});
+    console.log(`hire loop is running on port ${port}`)
+})
